@@ -5,8 +5,13 @@ using namespace accel;
 
 int main(int argc, char* argv[])
 {
-    endpoint ep(ip_address_v4::resolve("www.google.pt"), 80);
-    std::cout << "Resolved www.google.pt to " << ep.string() << "\n";
+    auto localhost = ip_address_v4::localhost();
+    auto google_ip = ip_address_v4::resolve("www.google.com");
+
+    localhost = google_ip;
+
+    endpoint ep(google_ip, 80);
+    std::cout << "Resolved www.google.com to " << ep.string() << "\n";
 
     socket sock(ip_versions::version_4, protocols::tcp);
     sock.connect(ep);

@@ -37,6 +37,9 @@ namespace accel
 	public:
 		friend class socket;
 
+		ACC_DEFAULT_COPYABLE(ip_address_v4);
+		ACC_DEFAULT_MOVABLE(ip_address_v4);
+
 		ACC_EXPORT static ip_address_v4 any();
 		ACC_EXPORT static ip_address_v4 localhost();
 		ACC_EXPORT static ip_address_v4 broadcast();
@@ -45,12 +48,6 @@ namespace accel
 
 		ACC_EXPORT ip_address_v4(std::uint32_t numeric);
 		ACC_EXPORT ip_address_v4(const std::string_view ip);
-
-		ACC_EXPORT ip_address_v4(const ip_address_v4&) = default;
-		ACC_EXPORT ip_address_v4& operator=(const ip_address_v4&) = default;
-
-		ACC_EXPORT ip_address_v4(ip_address_v4&&) = default;
-		ACC_EXPORT ip_address_v4& operator=(ip_address_v4&&) = default;
 
 		ACC_EXPORT std::string string() const;
 
@@ -62,6 +59,9 @@ namespace accel
 	{
 	public:
 		friend class socket;
+		
+		ACC_DEFAULT_COPYABLE(ip_address_v6);
+		ACC_DEFAULT_MOVABLE(ip_address_v6);
 
 		ACC_EXPORT static ip_address_v6 any();
 		ACC_EXPORT static ip_address_v6 localhost();
@@ -70,12 +70,6 @@ namespace accel
 
 		ACC_EXPORT ip_address_v6(const std::array<std::uint16_t, 8>& shorts);
 		ACC_EXPORT ip_address_v6(const std::string_view ip);
-
-		ACC_EXPORT ip_address_v6(const ip_address_v6&) = default;
-		ACC_EXPORT ip_address_v6& operator=(const ip_address_v6&) = default;
-
-		ACC_EXPORT ip_address_v6(ip_address_v6&&) = default;
-		ACC_EXPORT ip_address_v6& operator=(ip_address_v6&&) = default;
 
 		ACC_EXPORT std::string string() const;
 
@@ -90,13 +84,10 @@ namespace accel
 
 		using any_address = std::variant<ip_address_v4, ip_address_v6>;
 
+		ACC_DEFAULT_COPYABLE(endpoint);
+		ACC_DEFAULT_MOVABLE(endpoint);
+
 		ACC_EXPORT endpoint(const any_address& ip, std::uint16_t port);
-
-		ACC_EXPORT endpoint(const endpoint&) = default;
-		ACC_EXPORT endpoint& operator=(const endpoint&) = default;
-
-		ACC_EXPORT endpoint(endpoint&&) = default;
-		ACC_EXPORT endpoint& operator=(endpoint&&) = default;
 
 		ACC_EXPORT any_address ip() const;
 		ACC_EXPORT std::uint16_t port() const;
@@ -137,15 +128,12 @@ namespace accel
 	class socket
 	{
 	public:
+		ACC_DEFAULT_COPYABLE(socket);
+		ACC_DEFAULT_MOVABLE(socket);
+
 		ACC_EXPORT socket(void* socket_fd);
 		ACC_EXPORT socket(ip_versions version, protocols protocol);
 		ACC_EXPORT ~socket();
-
-		ACC_EXPORT socket(const socket&) = default;
-		ACC_EXPORT socket& operator=(const socket&) = default;
-
-		ACC_EXPORT socket(socket&&) = default;
-		ACC_EXPORT socket& operator=(socket&&) = default;
 
 		ACC_EXPORT void bind(const endpoint& endpoint);
 		ACC_EXPORT void listen();
