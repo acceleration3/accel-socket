@@ -11,7 +11,7 @@
 #include <variant>
 #include <utility>
 
-#include <accel/macros.hpp>
+#include <accel/macros>
 
 namespace accel
 {
