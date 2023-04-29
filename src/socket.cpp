@@ -1,4 +1,4 @@
-#include <accel/socket.hpp>
+#include <accel/socket>
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 	#define IS_WINDOWS 1
