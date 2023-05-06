@@ -2,104 +2,24 @@
 #define ACCEL_SOCKET_H
 
 #include <string>
-#include <string_view>
-#include <span>
 #include <ostream>
 #include <cstdint>
 #include <memory>
 #include <array>
-#include <variant>
 #include <utility>
 
 #include <accel/macros>
 
+#ifdef PLATFORM_WINDOWS
+	#include <WinSock2.h>
+	#include <ws2tcpip.h>
+#elif
+	#include <sys/socket.h>
+#endif
+
 namespace accel
 {
-	enum class ip_versions
-	{
-		version_4,
-		version_6,
-	};
-
-	enum class protocols
-	{
-		udp,
-		tcp,
-	};
-
-	class ip_address_v4;
-	class ip_address_v6;
-	class endpoint;
-	class socket;
-
-	class ip_address_v4
-	{
-	public:
-		friend class socket;
-
-		ACC_DEFAULT_COPYABLE(ip_address_v4);
-		ACC_DEFAULT_MOVABLE(ip_address_v4);
-
-		ACC_EXPORT static ip_address_v4 any();
-		ACC_EXPORT static ip_address_v4 localhost();
-		ACC_EXPORT static ip_address_v4 broadcast();
-
-		ACC_EXPORT static ip_address_v4 resolve(const std::string_view hostname);
-
-		ACC_EXPORT ip_address_v4();
-		ACC_EXPORT ip_address_v4(std::uint32_t numeric);
-		ACC_EXPORT ip_address_v4(const std::string_view ip);
-
-		ACC_EXPORT std::string string() const;
-
-	protected:
-		std::uint32_t m_value;
-	};
-
-	class ip_address_v6
-	{
-	public:
-		friend class socket;
-		
-		ACC_DEFAULT_COPYABLE(ip_address_v6);
-		ACC_DEFAULT_MOVABLE(ip_address_v6);
-
-		ACC_EXPORT static ip_address_v6 any();
-		ACC_EXPORT static ip_address_v6 localhost();
-
-		ACC_EXPORT static ip_address_v6 resolve(const std::string_view hostname);
-
-		ACC_EXPORT ip_address_v6();
-		ACC_EXPORT ip_address_v6(const std::array<std::uint16_t, 8>& shorts);
-		ACC_EXPORT ip_address_v6(const std::string_view ip);
-
-		ACC_EXPORT std::string string() const;
-
-	protected:
-		std::array<std::uint16_t, 8> m_values;
-	};
-
-	class endpoint
-	{
-	public:
-		friend class socket;
-
-		using any_address = std::variant<ip_address_v4, ip_address_v6>;
-
-		ACC_DEFAULT_COPYABLE(endpoint);
-		ACC_DEFAULT_MOVABLE(endpoint);
-
-		ACC_EXPORT endpoint();
-		ACC_EXPORT endpoint(const any_address& ip, std::uint16_t port);
-
-		ACC_EXPORT any_address ip() const;
-		ACC_EXPORT std::uint16_t port() const;
-		ACC_EXPORT std::string string() const;
-
-	private:
-		any_address m_ip;
-		std::uint16_t m_port;
-	};
+	using socket_t = decltype(::socket(0, 0, 0));
 
 	enum class socket_errors
 	{
@@ -116,74 +36,498 @@ namespace accel
 		would_block,
 	};
 
+	namespace details
+	{
+		socket_errors get_error(int code)
+		{
+#ifdef PLATFORM_WINDOWS
+			switch (code)
+			{
+				case WSAEBADF: return socket_errors::bad_file_descriptor;
+				case WSAEINVAL: return socket_errors::invalid;
+				case WSAEFAULT: return socket_errors::fault;
+				case WSAENOTSOCK: return socket_errors::not_a_socket;
+				case WSAEACCES: return socket_errors::access;
+				case WSAECONNABORTED: return socket_errors::connection_aborted;
+				case WSAEADDRINUSE: return socket_errors::address_in_use;
+				case WSAEOPNOTSUPP: return socket_errors::operation_not_supported;
+				case WSAEWOULDBLOCK: return socket_errors::would_block;
+				default: return socket_errors::unknown;
+			}
+#else
+			switch (code)
+			{
+				case EBADF: return socket_errors::bad_file_descriptor;
+				case EINVAL: return socket_errors::invalid;
+				case EFAULT: return socket_errors::fault;
+				case ENOTSOCK: return socket_errors::not_a_socket;
+				case EACCES: return socket_errors::access;
+				case ECONNABORTED: return socket_errors::connection_aborted;
+				case EADDRINUSE: return socket_errors::address_in_use;
+				case EOPNOTSUPP: return socket_errors::operation_not_supported;
+				case EWOULDBLOCK: return socket_errors::would_block;
+				case EAGAIN: return socket_errors::would_block;
+				default: return socket_errors::unknown;
+			}
+#endif
+		}
+	}
+
 	class socket_exception : public std::exception
 	{
 	public:
-		ACC_EXPORT socket_exception();
-		ACC_EXPORT const char* what() const noexcept override;
-		ACC_EXPORT socket_errors error() const;
+		socket_exception()
+		{
+#ifdef PLATFORM_WINDOWS
+			int code = WSAGetLastError();
+			m_error = details::get_error(code);
+
+			char buffer[1024];
+			FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), buffer, 1024, nullptr);
+			m_message = std::string(buffer);
+#else
+			int code = errno();
+			m_message = strerror(code);
+#endif
+		}
+
+		const char* what() const noexcept override { return m_message.c_str(); }
+		socket_errors error() const { return m_error; }
 
 	private:
 		socket_errors m_error;
 		std::string m_message;
 	};
 
+	namespace details
+	{
+#ifdef PLATFORM_WINDOWS
+		struct wsa_initializer
+		{
+			wsa_initializer()
+			{
+				WSADATA data;
+				if (WSAStartup(MAKEWORD(2, 2), &data) != 0)
+					throw socket_exception();
+			}
+
+			~wsa_initializer()
+			{
+				WSACleanup();
+			}
+		};
+		
+		static wsa_initializer g_initializer = {};
+#endif
+	}
+
+	enum class ip_versions
+	{
+		version_4,
+		version_6,
+	};
+
+	enum class protocols
+	{
+		udp,
+		tcp,
+	};
+
+	class ip_address_v4
+	{
+	public:
+		friend class socket;
+
+		ACC_DEFAULT_COPYABLE(ip_address_v4);
+		ACC_DEFAULT_MOVABLE(ip_address_v4);
+
+		static ip_address_v4 any() { return ip_address_v4(INADDR_ANY); }
+		static ip_address_v4 localhost() { return ip_address_v4(INADDR_LOOPBACK); }
+		static ip_address_v4 broadcast() { return ip_address_v4(INADDR_BROADCAST); }
+
+		static ip_address_v4 resolve(const std::string& hostname)
+		{
+			struct addrinfo* results = nullptr;
+			struct addrinfo hints{};
+			hints.ai_family = AF_INET;
+			if (getaddrinfo(hostname.data(), nullptr, &hints, &results) != 0)
+				throw socket_exception();
+
+			auto addr = reinterpret_cast<struct sockaddr_in*>(results->ai_addr);
+			return ip_address_v4(addr->sin_addr.S_un.S_addr);
+		}
+
+		ip_address_v4() : m_value(0) {}
+		ip_address_v4(std::uint32_t numeric) : m_value(numeric) {}
+		ip_address_v4(const std::string& ip)
+		{
+			struct in_addr address;
+			if (!inet_pton(AF_INET, ip.data(), &address))
+				throw std::invalid_argument("Failed to convert text to an IPv4 address.");
+			m_value = ntohl(address.S_un.S_addr);
+		}
+
+		std::string to_string() const
+		{
+			char buffer[17];
+			struct in_addr address;
+			address.S_un.S_addr = htonl(m_value);
+			if (!inet_ntop(AF_INET, &address, buffer, 17))
+				throw std::runtime_error("Failed to convert IPv4 from binary to the text representation.");
+			return std::string(buffer);
+		}
+
+	protected:
+		std::uint32_t m_value;
+	};
+
+	class ip_address_v6
+	{
+	public:
+		friend class socket;
+		
+		ACC_DEFAULT_COPYABLE(ip_address_v6);
+		ACC_DEFAULT_MOVABLE(ip_address_v6);
+
+		static ip_address_v6 any() { return ip_address_v6("::"); }
+		static ip_address_v6 localhost() { return ip_address_v6("::1"); }
+
+		static ip_address_v6 resolve(const std::string& hostname)
+		{
+			struct addrinfo* results = nullptr;
+			struct addrinfo hints {};
+			hints.ai_family = AF_INET6;
+			if (getaddrinfo(hostname.data(), nullptr, &hints, &results) != 0)
+				throw socket_exception();
+			auto address = reinterpret_cast<struct sockaddr_in6*>(results->ai_addr);
+			std::array<std::uint16_t, 8> values;
+			std::copy(std::begin(address->sin6_addr.u.Word), std::end(address->sin6_addr.u.Word), values.begin());
+			return ip_address_v6(values);
+		}
+
+		ip_address_v6() : m_values() {}
+		ip_address_v6(const std::array<std::uint16_t, 8>& shorts): m_values(shorts) {}
+		ip_address_v6(const std::string& ip)
+		{
+			struct in_addr6 address;
+			if (!inet_pton(AF_INET6, ip.data(), &address))
+				throw std::invalid_argument("Failed to convert text to an IPv6 address.");
+			std::copy(std::begin(address.u.Word), std::end(address.u.Word), m_values.begin());
+		}
+
+		std::string to_string() const
+		{
+			char buffer[40];
+			struct in_addr6 address;
+			std::copy(m_values.begin(), m_values.end(), std::begin(address.u.Word));
+			if (!inet_ntop(AF_INET6, &address, buffer, 40))
+				throw std::runtime_error("Failed to convert IPv6 from binary to the text representation.");
+			return std::string(buffer);
+		}
+
+	protected:
+		std::array<std::uint16_t, 8> m_values;
+	};
+
+	template<typename AddressT>
+	class endpoint
+	{
+	public:
+		friend class socket;
+
+		ACC_DEFAULT_COPYABLE(endpoint);
+		ACC_DEFAULT_MOVABLE(endpoint);
+
+		endpoint(): m_address(0), m_port(0) {}
+		endpoint(AddressT&& address, std::uint16_t port) : m_address(std::move(address)), m_port(port) {}
+
+		AddressT get_address() const { return m_address; }
+		std::uint16_t get_port() const { return m_port; }
+		std::string to_string() const { return m_address.to_string() + ":" + std::to_string(m_port); }
+
+	private:
+		AddressT m_address;
+		std::uint16_t m_port;
+	};
+
+	using endpoint_v4 = endpoint<ip_address_v4>;
+	using endpoint_v6 = endpoint<ip_address_v6>;
+
 	class socket
 	{
 	public:
-		ACC_EXPORT socket(void* socket_fd);
-		ACC_EXPORT socket(ip_versions version, protocols protocol);
-		ACC_EXPORT ~socket();
-
-		ACC_EXPORT socket(socket&& other);
-		ACC_EXPORT socket& operator=(socket&& other);
-
-		ACC_EXPORT void bind(endpoint& endpoint);
-		ACC_EXPORT void listen();
-		ACC_EXPORT void connect(const endpoint& endpoint);
-
-		using connection = std::pair<socket, endpoint>;
-		ACC_EXPORT connection accept();
-
-		ACC_EXPORT std::ptrdiff_t receive(std::uint8_t* data, int length);
-		ACC_EXPORT std::ptrdiff_t send(const std::uint8_t* data, int length);
-		ACC_EXPORT std::ptrdiff_t receive_from(endpoint& ep, std::uint8_t* data, int length);
-		ACC_EXPORT std::ptrdiff_t send_to(const endpoint& ep, const std::uint8_t* data, int length);
-
-		template<typename T>
-		std::ptrdiff_t receive(std::span<T> data)
+		socket(socket_t socket_fd) :
+			m_sock(socket_fd)
 		{
-			return receive(reinterpret_cast<std::uint8_t*>(data.data()), static_cast<int>(data.size_bytes()));
+			struct sockaddr_storage address;
+			socklen_t length = sizeof(address);
+			if (getsockname(m_sock, reinterpret_cast<sockaddr*>(&address), &length) < 0)
+				throw socket_exception();
+			m_family = address.ss_family;
 		}
 
-		template<typename T>
-		std::ptrdiff_t send(const std::span<T> data)
+		socket(ip_versions version, protocols protocol)
 		{
-			return send(reinterpret_cast<const std::uint8_t*>(data.data()), static_cast<int>(data.size_bytes()));
+			if (version == ip_versions::version_4)
+				m_family = AF_INET;
+			else
+				m_family = AF_INET6;
+
+			if (protocol == protocols::tcp)
+				m_sock = ::socket(m_family, SOCK_STREAM, IPPROTO_TCP);
+			else
+				m_sock = ::socket(m_family, SOCK_DGRAM, IPPROTO_UDP);
+
+			if (m_sock == INVALID_SOCKET)
+				throw socket_exception();
 		}
 
-		template<typename T>
-		std::ptrdiff_t receive_from(endpoint& ep, std::span<T> data)
+		ACC_DEFAULT_COPYABLE(socket);
+		ACC_DEFAULT_MOVABLE(socket);
+
+		~socket()
 		{
-			return receive_from(ep, reinterpret_cast<std::uint8_t*>(data.data()), static_cast<int>(data.size_bytes()));
+#ifdef PLATFORM_WINDOWS
+		if (m_sock)
+			::closesocket(m_sock);
+#else
+		if (m_sock)
+			::close(m_sock);
+#endif
 		}
 
-		template<typename T>
-		std::ptrdiff_t send_to(const endpoint& ep, const std::span<T> data)
+		void listen()
 		{
-			return send_to(ep, reinterpret_cast<const std::uint8_t*>(data.data()), static_cast<int>(data.size_bytes()));
+			if (::listen(m_sock, -1) != 0)
+				throw socket_exception();
 		}
 
-		ACC_EXPORT void set_non_blocking(bool state);
-		ACC_EXPORT void set_broadcast(bool state);
-		ACC_EXPORT void set_tcp_nodelay(bool state);
+		std::ptrdiff_t receive(std::uint8_t* data, int length)
+		{
+			std::ptrdiff_t data_length = ::recv(m_sock, reinterpret_cast<char*>(data), length, 0);
+			if (data_length < 0)
+				throw socket_exception();
+			return data_length;
+		}
 
-		endpoint get_endpoint() const;
+		std::ptrdiff_t send(const std::uint8_t* data, int length)
+		{
+			std::ptrdiff_t data_length = ::send(m_sock, reinterpret_cast<const char*>(data), length, 0);
+			if (data_length < 0)
+				throw socket_exception();
+			return data_length;
+		}
+		
+		void set_non_blocking(bool state)
+		{
+#ifdef PLATFORM_WINDOWS
+			unsigned long mode = state ? 1 : 0;
+			if (::ioctlsocket(m_sock, FIONBIO, &mode) != 0)
+				throw socket_exception();
+#else
+			int flags = ::fcntl(m_sock, F_GETFL, 0);
+			if (flags == -1)
+				throw socket_exception();
+			flags = state ? (flags & ~O_NONBLOCK) : (flags | O_NONBLOCK);
+			if (fcntl(m_sock, F_SETFL, flags) != 0)
+				throw socket_exception();
+#endif
+		}
+
+		void set_broadcast(bool state)
+		{
+			int mode = state ? 1 : 0;
+			if (setsockopt(m_sock, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&mode), sizeof(mode)) != 0)
+				throw std::runtime_error("Failed to set socket to broadcasting mode.");
+		}
+
+		void set_tcp_nodelay(bool state)
+		{
+			unsigned long mode = state ? 1 : 0;
+			if (setsockopt(m_sock, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&mode), sizeof(mode)) != 0)
+				throw std::runtime_error("Failed to set socket to no delay mode.");
+		}
+
+		template<typename EndpointT> void bind(EndpointT& endpoint);
+
+		template<typename EndpointT> void connect(const EndpointT& endpoint);
+
+		template<typename EndpointT> using connection = std::pair<socket, EndpointT>;
+
+		template<typename EndpointT> connection<EndpointT> accept();
+
+		template<typename EndpointT> EndpointT get_endpoint() const;
+
+		template<typename EndpointT> std::ptrdiff_t receive_from(EndpointT& ep, std::uint8_t* data, int length);
+
+		template<typename EndpointT> std::ptrdiff_t send_to(const EndpointT& ep, const std::uint8_t* data, int length);
 
 	private:
-		struct impl;
-		std::unique_ptr<impl> m_impl;
+		short m_family;
+		socket_t m_sock;
 	};
+
+	template<> endpoint_v4 socket::get_endpoint<endpoint_v4>() const
+	{
+		struct sockaddr_storage address;
+		socklen_t length = sizeof(address);
+		if (getsockname(m_sock, reinterpret_cast<sockaddr*>(&address), &length) < 0)
+			throw socket_exception();
+		sockaddr_in* ipv4 = reinterpret_cast<sockaddr_in*>(&address);
+		return endpoint_v4(ip_address_v4(ipv4->sin_addr.s_addr), ntohs(ipv4->sin_port));
+	}
+
+	template<> endpoint_v6 socket::get_endpoint<endpoint_v6>() const
+	{
+		struct sockaddr_storage address;
+		socklen_t length = sizeof(address);
+		if (getsockname(m_sock, reinterpret_cast<sockaddr*>(&address), &length) < 0)
+			throw socket_exception();
+		sockaddr_in6* ipv6 = reinterpret_cast<sockaddr_in6*>(&address);
+		std::array<std::uint16_t, 8> shorts;
+		std::copy(std::begin(ipv6->sin6_addr.u.Word), std::end(ipv6->sin6_addr.u.Word), std::begin(shorts));
+		return endpoint_v6(ip_address_v6(shorts), ntohs(ipv6->sin6_port));
+	}
+
+	template<> void socket::bind<endpoint_v4>(endpoint_v4& endpoint)
+	{
+		if (m_family != AF_INET)
+			throw std::invalid_argument("Can't bind socket to endpoint of different version.");
+
+		struct sockaddr_in address {};
+		address.sin_family = AF_INET;
+		address.sin_addr.S_un.S_addr = htonl(endpoint.m_address.m_value);
+		address.sin_port = htons(endpoint.m_port);
+		if (::bind(m_sock, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0)
+			throw socket_exception();
+
+		endpoint = get_endpoint<endpoint_v4>();
+	}
+
+	template<> void socket::bind<endpoint_v6>(endpoint_v6& endpoint)
+	{
+		if (m_family != AF_INET6)
+			throw std::invalid_argument("Can't bind socket to endpoint of different version.");
+
+		struct sockaddr_in6 address {};
+		auto& ipv6 = endpoint.m_address;
+		std::copy(ipv6.m_values.begin(), ipv6.m_values.end(), std::begin(address.sin6_addr.u.Word));
+		address.sin6_family = AF_INET6;
+		address.sin6_port = htons(endpoint.m_port);
+		if (::bind(m_sock, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0)
+			throw socket_exception();
+
+		endpoint = get_endpoint<endpoint_v6>();
+	}
+
+	template<> void socket::connect<endpoint_v4>(const endpoint_v4& endpoint)
+	{
+		if (m_family != AF_INET)
+			throw std::invalid_argument("Can't connect socket to endpoint of different version.");
+
+		struct sockaddr_in address {};
+		address.sin_family = AF_INET;
+		address.sin_addr.S_un.S_addr = endpoint.m_address.m_value;
+		address.sin_port = htons(endpoint.m_port);
+		if (::connect(m_sock, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0)
+			throw socket_exception();
+	}
+
+	template<> void socket::connect<endpoint_v6>(const endpoint_v6& endpoint)
+	{
+		if (m_family != AF_INET6)
+			throw std::invalid_argument("Can't connect socket to endpoint of different version.");
+
+		struct sockaddr_in6 address {};
+		auto& ipv6 = endpoint.m_address;
+		std::copy(ipv6.m_values.begin(), ipv6.m_values.end(), std::begin(address.sin6_addr.u.Word));
+		address.sin6_family = AF_INET6;
+		address.sin6_port = htons(endpoint.m_port);
+		if (::connect(m_sock, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0)
+			throw socket_exception();
+	}
+
+	template<> std::ptrdiff_t socket::receive_from<endpoint_v4>(endpoint_v4& ep, std::uint8_t* data, int length)
+	{
+		struct sockaddr_storage address {};
+		socklen_t address_length = sizeof(address);
+
+		std::ptrdiff_t data_length = ::recvfrom(m_sock, reinterpret_cast<char*>(data), length, 0, reinterpret_cast<sockaddr*>(&address), &address_length);
+		if (data_length < 0)
+			throw socket_exception();
+
+		auto ipv4 = reinterpret_cast<sockaddr_in*>(std::addressof(address));
+		ep.m_address = ip_address_v4(ntohl(ipv4->sin_addr.S_un.S_addr));
+		ep.m_port = ntohs(ipv4->sin_port);
+		return data_length;
+	}
+
+	template<> std::ptrdiff_t socket::receive_from<endpoint_v6>(endpoint_v6& ep, std::uint8_t* data, int length)
+	{
+		struct sockaddr_storage address {};
+		socklen_t address_length = sizeof(address);
+
+		std::ptrdiff_t data_length = ::recvfrom(m_sock, reinterpret_cast<char*>(data), length, 0, reinterpret_cast<sockaddr*>(&address), &address_length);
+		if (data_length < 0)
+			throw socket_exception();
+
+		auto ipv6 = reinterpret_cast<sockaddr_in6*>(std::addressof(address));
+		std::array<std::uint16_t, 8> values;
+		std::copy(std::begin(ipv6->sin6_addr.u.Word), std::end(ipv6->sin6_addr.u.Word), values.begin());
+		ep.m_address = ip_address_v6(values);
+		ep.m_port = ipv6->sin6_port;
+		return data_length;
+	}
+
+	template<> std::ptrdiff_t socket::send_to<endpoint_v4>(const endpoint_v4& ep, const std::uint8_t* data, int length)
+	{
+		struct sockaddr_in address {};
+		address.sin_family = AF_INET;
+		address.sin_addr.S_un.S_addr = htonl(ep.m_address.m_value);
+		address.sin_port = htons(ep.m_port);
+		socklen_t from_length = sizeof(address);
+		std::ptrdiff_t data_length = sendto(m_sock, reinterpret_cast<const char*>(data), length, 0, reinterpret_cast<const sockaddr*>(&address), from_length);
+		if (data_length < 0)
+			throw socket_exception();
+		return data_length;
+	}
+
+	template<> std::ptrdiff_t socket::send_to<endpoint_v6>(const endpoint_v6& ep, const std::uint8_t* data, int length)
+	{
+		struct sockaddr_in6 address;
+		std::copy(ep.m_address.m_values.begin(), ep.m_address.m_values.end(), std::begin(address.sin6_addr.u.Word));
+		address.sin6_family = AF_INET6;
+		address.sin6_port = htons(ep.m_port);
+		socklen_t from_length = sizeof(address);
+		std::ptrdiff_t data_length = sendto(m_sock, reinterpret_cast<const char*>(data), length, 0, reinterpret_cast<const sockaddr*>(&address), from_length);
+		if (data_length < 0)
+			throw socket_exception();
+		return data_length;
+	}
+
+	template<> socket::connection<endpoint_v4> socket::accept<endpoint_v4>()
+	{
+		socket_t client_socket = INVALID_SOCKET;
+		struct sockaddr_in address {};
+		socklen_t length = sizeof(address);
+		client_socket = ::accept(m_sock, reinterpret_cast<sockaddr*>(&address), &length);
+		if (client_socket == INVALID_SOCKET)
+			throw socket_exception();
+		return std::make_pair<socket, endpoint_v4>(socket(client_socket), endpoint_v4(ip_address_v4(ntohl(address.sin_addr.S_un.S_addr)), ntohs(address.sin_port)));
+	}
+
+	template<> socket::connection<endpoint_v6> socket::accept<endpoint_v6>()
+	{
+		socket_t client_socket = INVALID_SOCKET;
+		struct sockaddr_in6 address {};
+		socklen_t length = sizeof(address);
+		client_socket = ::accept(m_sock, reinterpret_cast<sockaddr*>(&address), &length);
+		if (client_socket == INVALID_SOCKET)
+			throw socket_exception();
+		std::array<std::uint16_t, 8> values;
+		std::copy(std::begin(address.sin6_addr.u.Word), std::end(address.sin6_addr.u.Word), values.begin());
+		return std::make_pair<socket, endpoint_v6>(socket(client_socket), endpoint_v6(ip_address_v6(values), ntohs(address.sin6_port)));
+	}
 }
 
 #endif

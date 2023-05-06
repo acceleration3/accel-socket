@@ -1,19 +1,14 @@
 #include <iostream>
-#include <accel/socket.hpp>
-
-using namespace accel;
+#include <accel/socket>
 
 int main(int argc, char* argv[])
 {
-    auto localhost = ip_address_v4::localhost();
-    auto google_ip = ip_address_v4::resolve("www.google.com");
+    auto localhost = accel::ip_address_v4::localhost();
+  
+    accel::endpoint_v4 ep(accel::ip_address_v4::resolve("www.google.com"), 80);
+    std::cout << "Resolved www.google.com to " << ep.to_string() << "\n";
 
-    localhost = google_ip;
-
-    endpoint ep(google_ip, 80);
-    std::cout << "Resolved www.google.com to " << ep.string() << "\n";
-
-    socket sock(ip_versions::version_4, protocols::tcp);
+    accel::socket sock(accel::ip_versions::version_4, accel::protocols::tcp);
     sock.connect(ep);
 
     std::string data = "GET http://www.google.com/index.html HTTP/1.1\nConnection: close\n\n";
@@ -26,6 +21,7 @@ int main(int argc, char* argv[])
         auto chunk_size = sock.receive(buffer, 1024);
         if (chunk_size == 0)
             break;
+        std::cout << buffer;
         total_size += chunk_size;
     }
 
