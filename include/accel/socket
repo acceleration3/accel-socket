@@ -38,7 +38,7 @@ namespace accel
 
 	namespace details
 	{
-		socket_errors get_error(int code)
+		inline socket_errors get_error(int code)
 		{
 #ifdef PLATFORM_WINDOWS
 			switch (code)
@@ -83,7 +83,7 @@ namespace accel
 			m_error = details::get_error(code);
 
 			char buffer[1024];
-			FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), buffer, 1024, nullptr);
+			FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), buffer, 1024, nullptr);
 			m_message = std::string(buffer);
 #else
 			int code = errno();
@@ -367,7 +367,7 @@ namespace accel
 		socket_t m_sock;
 	};
 
-	template<> endpoint_v4 socket::get_endpoint<endpoint_v4>() const
+	template<> inline endpoint_v4 socket::get_endpoint<endpoint_v4>() const
 	{
 		struct sockaddr_storage address;
 		socklen_t length = sizeof(address);
@@ -377,7 +377,7 @@ namespace accel
 		return endpoint_v4(ip_address_v4(ipv4->sin_addr.s_addr), ntohs(ipv4->sin_port));
 	}
 
-	template<> endpoint_v6 socket::get_endpoint<endpoint_v6>() const
+	template<> inline endpoint_v6 socket::get_endpoint<endpoint_v6>() const
 	{
 		struct sockaddr_storage address;
 		socklen_t length = sizeof(address);
@@ -389,7 +389,7 @@ namespace accel
 		return endpoint_v6(ip_address_v6(shorts), ntohs(ipv6->sin6_port));
 	}
 
-	template<> void socket::bind<endpoint_v4>(endpoint_v4& endpoint)
+	template<> inline void socket::bind<endpoint_v4>(endpoint_v4& endpoint)
 	{
 		if (m_family != AF_INET)
 			throw std::invalid_argument("Can't bind socket to endpoint of different version.");
@@ -404,7 +404,7 @@ namespace accel
 		endpoint = get_endpoint<endpoint_v4>();
 	}
 
-	template<> void socket::bind<endpoint_v6>(endpoint_v6& endpoint)
+	template<> inline void socket::bind<endpoint_v6>(endpoint_v6& endpoint)
 	{
 		if (m_family != AF_INET6)
 			throw std::invalid_argument("Can't bind socket to endpoint of different version.");
@@ -420,7 +420,7 @@ namespace accel
 		endpoint = get_endpoint<endpoint_v6>();
 	}
 
-	template<> void socket::connect<endpoint_v4>(const endpoint_v4& endpoint)
+	template<> inline void socket::connect<endpoint_v4>(const endpoint_v4& endpoint)
 	{
 		if (m_family != AF_INET)
 			throw std::invalid_argument("Can't connect socket to endpoint of different version.");
@@ -433,7 +433,7 @@ namespace accel
 			throw socket_exception();
 	}
 
-	template<> void socket::connect<endpoint_v6>(const endpoint_v6& endpoint)
+	template<> inline void socket::connect<endpoint_v6>(const endpoint_v6& endpoint)
 	{
 		if (m_family != AF_INET6)
 			throw std::invalid_argument("Can't connect socket to endpoint of different version.");
@@ -447,7 +447,7 @@ namespace accel
 			throw socket_exception();
 	}
 
-	template<> std::ptrdiff_t socket::receive_from<endpoint_v4>(endpoint_v4& ep, std::uint8_t* data, int length)
+	template<> inline std::ptrdiff_t socket::receive_from<endpoint_v4>(endpoint_v4& ep, std::uint8_t* data, int length)
 	{
 		struct sockaddr_storage address {};
 		socklen_t address_length = sizeof(address);
@@ -462,7 +462,7 @@ namespace accel
 		return data_length;
 	}
 
-	template<> std::ptrdiff_t socket::receive_from<endpoint_v6>(endpoint_v6& ep, std::uint8_t* data, int length)
+	template<> inline std::ptrdiff_t socket::receive_from<endpoint_v6>(endpoint_v6& ep, std::uint8_t* data, int length)
 	{
 		struct sockaddr_storage address {};
 		socklen_t address_length = sizeof(address);
@@ -479,7 +479,7 @@ namespace accel
 		return data_length;
 	}
 
-	template<> std::ptrdiff_t socket::send_to<endpoint_v4>(const endpoint_v4& ep, const std::uint8_t* data, int length)
+	template<> inline std::ptrdiff_t socket::send_to<endpoint_v4>(const endpoint_v4& ep, const std::uint8_t* data, int length)
 	{
 		struct sockaddr_in address {};
 		address.sin_family = AF_INET;
@@ -492,7 +492,7 @@ namespace accel
 		return data_length;
 	}
 
-	template<> std::ptrdiff_t socket::send_to<endpoint_v6>(const endpoint_v6& ep, const std::uint8_t* data, int length)
+	template<> inline std::ptrdiff_t socket::send_to<endpoint_v6>(const endpoint_v6& ep, const std::uint8_t* data, int length)
 	{
 		struct sockaddr_in6 address;
 		std::copy(ep.m_address.m_values.begin(), ep.m_address.m_values.end(), std::begin(address.sin6_addr.u.Word));
@@ -505,7 +505,7 @@ namespace accel
 		return data_length;
 	}
 
-	template<> socket::connection<endpoint_v4> socket::accept<endpoint_v4>()
+	template<> inline socket::connection<endpoint_v4> socket::accept<endpoint_v4>()
 	{
 		socket_t client_socket = INVALID_SOCKET;
 		struct sockaddr_in address {};
@@ -516,7 +516,7 @@ namespace accel
 		return std::make_pair<socket, endpoint_v4>(socket(client_socket), endpoint_v4(ip_address_v4(ntohl(address.sin_addr.S_un.S_addr)), ntohs(address.sin_port)));
 	}
 
-	template<> socket::connection<endpoint_v6> socket::accept<endpoint_v6>()
+	template<> inline socket::connection<endpoint_v6> socket::accept<endpoint_v6>()
 	{
 		socket_t client_socket = INVALID_SOCKET;
 		struct sockaddr_in6 address {};
