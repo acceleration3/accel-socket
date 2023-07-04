@@ -1,18 +1,24 @@
 #include <iostream>
+
+#include <accel/macros>
 #include <accel/socket>
 
 int main(int argc, char* argv[])
 {
-    auto localhost = accel::ip_address_v4::localhost();
-  
-    accel::endpoint_v4 ep(accel::ip_address_v4::resolve("www.google.com"), 80);
-    std::cout << "Resolved www.google.com to " << ep.to_string() << "\n";
+    ACC_ASSERT(accel::ip_address_v4::localhost().to_string() == "127.0.0.1");
+    ACC_ASSERT(accel::ip_address_v4::broadcast().to_string() == "255.255.255.255");
+    ACC_ASSERT(accel::ip_address_v4::any().to_string() == "0.0.0.0");
+    ACC_ASSERT(accel::ip_address_v4("1.2.3.4").to_string() == "1.2.3.4");
 
+    auto google_ip = accel::ip_address_v4::resolve("www.google.com");
+    std::cout << "Resolved www.google.com to " << google_ip.to_string() << "\n";
+
+    accel::endpoint_v4 ep(google_ip, 80);
     accel::socket sock(accel::ip_versions::version_4, accel::protocols::tcp);
     sock.connect(ep);
 
     std::string data = "GET http://www.google.com/index.html HTTP/1.1\nConnection: close\n\n";
-    sock.send(reinterpret_cast<const uint8_t*>(data.data()), data.size());
+    sock.send(reinterpret_cast<const std::uint8_t*>(data.data()), data.size());
 
     std::size_t total_size = 0;
     while (true)
