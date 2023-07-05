@@ -8,16 +8,27 @@
 #include <array>
 #include <utility>
 
+#include <cstring>
+
 #include <accel/macros>
 #include <accel/utf8>
 #include <accel/endianess>
 
 #ifdef PLATFORM_WINDOWS
+	#define O_NDELAY TCP_NODELAY
 	#define UNICODE
 	#include <WinSock2.h>
 	#include <ws2tcpip.h>
-#elif
+#else
+	#define INVALID_SOCKET ~0
+	#include <unistd.h>
+	#include <fcntl.h>
+	#include <netdb.h>
+	#include <arpa/inet.h>
+	#include <sys/types.h>
 	#include <sys/socket.h>
+	#include <netinet/ip.h>
+	#include <netinet/ip6.h>
 #endif
 
 namespace accel
@@ -69,7 +80,6 @@ namespace accel
 				case EADDRINUSE: return socket_errors::address_in_use;
 				case EOPNOTSUPP: return socket_errors::operation_not_supported;
 				case EWOULDBLOCK: return socket_errors::would_block;
-				case EAGAIN: return socket_errors::would_block;
 				default: return socket_errors::unknown;
 			}
 #endif
@@ -89,8 +99,8 @@ namespace accel
 			FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), buffer, 1024, nullptr);
 			m_message = buffer;
 #else
-			int code = errno();
-			m_message = strerror(code);
+			int code = errno;
+			m_message = utf8::string(strerror(code));
 #endif
 		}
 
@@ -197,7 +207,7 @@ namespace accel
 			if (getaddrinfo(hostname.c_str(), nullptr, &hints, &results) != 0)
 				throw socket_exception();
 			auto addr = reinterpret_cast<sockaddr_in*>(results->ai_addr);
-			return ip_address_v4(network_u32(addr->sin_addr.S_un.S_addr));
+			return ip_address_v4(network_u32(addr->sin_addr.s_addr));
 		}
 
 		ip_address_v4() : m_value(0) {}
@@ -216,7 +226,7 @@ namespace accel
 		{
 			char buffer[17];
 			struct in_addr address;
-			address.S_un.S_addr = m_value.get_network_value();
+			address.s_addr = m_value.get_network_value();
 			if (!inet_ntop(AF_INET, &address, buffer, 17))
 				throw std::runtime_error("Failed to convert IPv4 from binary to the text representation.");
 			return std::string(buffer);
@@ -246,18 +256,19 @@ namespace accel
 				throw socket_exception();
 			auto address = reinterpret_cast<sockaddr_in6*>(results->ai_addr);
 			std::array<std::uint16_t, 8> values;
-			std::copy(std::begin(address->sin6_addr.u.Word), std::end(address->sin6_addr.u.Word), values.begin());
+			std::memcpy(values.data(), address, sizeof(in6_addr));
 			return ip_address_v6(values);
 		}
 
 		ip_address_v6() : m_values() {}
 		ip_address_v6(const std::array<std::uint16_t, 8>& shorts): m_values(shorts) {}
+		ip_address_v6(std::array<std::uint16_t, 8>&& shorts): m_values(std::move(shorts)) {}
 		ip_address_v6(const std::string& ip)
 		{
-			in_addr6 address;
+			in6_addr address;
 			if (!inet_pton(AF_INET6, ip.c_str(), &address))
 				throw std::invalid_argument("Failed to convert text to an IPv6 address.");
-			std::copy(std::begin(address.u.Word), std::end(address.u.Word), m_values.begin());
+			std::memcpy(&address, m_values.data(), sizeof(in6_addr));
 		}
 
 		const values_t& get_values() const { return m_values; }
@@ -266,8 +277,8 @@ namespace accel
 		std::string to_string() const
 		{
 			char buffer[40];
-			in_addr6 address;
-			std::copy(m_values.begin(), m_values.end(), std::begin(address.u.Word));
+			in6_addr address;
+			std::memcpy(&address, m_values.data(), sizeof(in6_addr));
 			if (!inet_ntop(AF_INET6, &address, buffer, 40))
 				throw std::runtime_error("Failed to convert IPv6 from binary to the text representation.");
 			return std::string(buffer);
@@ -395,7 +406,7 @@ namespace accel
 		void set_tcp_nodelay(bool state)
 		{
 			unsigned long mode = state ? 1 : 0;
-			if (setsockopt(m_sock, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&mode), sizeof(mode)) != 0)
+			if (setsockopt(m_sock, IPPROTO_TCP, O_NDELAY, reinterpret_cast<const char*>(&mode), sizeof(mode)) != 0)
 				throw std::runtime_error("Failed to set socket to no delay mode.");
 		}
 
@@ -439,7 +450,7 @@ namespace accel
 		sockaddr_in6* ipv6 = reinterpret_cast<sockaddr_in6*>(&address);
 		
 		std::array<std::uint16_t, 8> shorts;
-		std::copy(std::begin(ipv6->sin6_addr.u.Word), std::end(ipv6->sin6_addr.u.Word), std::begin(shorts));
+		std::memcpy(shorts.data(), &ipv6->sin6_addr, sizeof(in6_addr));
 		return endpoint_v6(ip_address_v6(shorts), network_u16(ipv6->sin6_port));
 	}
 
@@ -450,7 +461,7 @@ namespace accel
 
 		sockaddr_in address {};
 		address.sin_family = AF_INET;
-		address.sin_addr.S_un.S_addr = endpoint.get_address().get_network_value();
+		address.sin_addr.s_addr = endpoint.get_address().get_network_value();
 		address.sin_port = endpoint.get_network_port();
 		if (::bind(m_sock, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0)
 			throw socket_exception();
@@ -468,7 +479,7 @@ namespace accel
 		address.sin6_port = endpoint.get_network_port();
 		
 		auto ipv6 = endpoint.get_address().get_values();
-		std::copy(ipv6.begin(), ipv6.end(), std::begin(address.sin6_addr.u.Word));
+		std::memcpy(&address.sin6_addr, &ipv6, sizeof(in6_addr));
 		
 		if (::bind(m_sock, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0)
 			throw socket_exception();
@@ -483,7 +494,7 @@ namespace accel
 
 		sockaddr_in address {};
 		address.sin_family = AF_INET;
-		address.sin_addr.S_un.S_addr = endpoint.get_address().get_network_value();
+		address.sin_addr.s_addr = endpoint.get_address().get_network_value();
 		address.sin_port = endpoint.get_network_port();
 		if (::connect(m_sock, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0)
 			throw socket_exception();
@@ -499,7 +510,7 @@ namespace accel
 		address.sin6_port = endpoint.get_port().get_network_value();
 
 		auto& ipv6 = endpoint.get_address().get_values();
-		std::copy(ipv6.begin(), ipv6.end(), std::begin(address.sin6_addr.u.Word));
+		std::memcpy(&address.sin6_addr, &ipv6, sizeof(in6_addr));
 
 		if (::connect(m_sock, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0)
 			throw socket_exception();
@@ -515,7 +526,7 @@ namespace accel
 			throw socket_exception();
 
 		auto ipv4 = reinterpret_cast<sockaddr_in*>(std::addressof(address));
-		ep.m_address = ip_address_v4(network_u32(ipv4->sin_addr.S_un.S_addr));
+		ep.m_address = ip_address_v4(network_u32(ipv4->sin_addr.s_addr));
 		ep.m_port = ntohs(ipv4->sin_port);
 
 		return data_length;
@@ -531,10 +542,10 @@ namespace accel
 			throw socket_exception();
 
 		auto ipv6 = reinterpret_cast<sockaddr_in6*>(std::addressof(address));
-		std::array<std::uint16_t, 8> values;
-		std::copy(std::begin(ipv6->sin6_addr.u.Word), std::end(ipv6->sin6_addr.u.Word), values.begin());
+		std::array<std::uint16_t, 8> shorts;
+		std::memcpy(shorts.data(), &ipv6->sin6_addr, sizeof(in6_addr));
 
-		ep.m_address = ip_address_v6(values);
+		ep.m_address = ip_address_v6(shorts);
 		ep.m_port = network_u16(ipv6->sin6_port);
 		
 		return data_length;
@@ -544,7 +555,7 @@ namespace accel
 	{
 		sockaddr_in address {};
 		address.sin_family = AF_INET;
-		address.sin_addr.S_un.S_addr = ep.get_address().get_network_value();
+		address.sin_addr.s_addr = ep.get_address().get_network_value();
 		address.sin_port = ep.get_network_port();
 
 		socklen_t from_length = sizeof(address);
@@ -562,7 +573,7 @@ namespace accel
 		address.sin6_port = htons(ep.m_port);
 
 		auto& ipv6 = ep.get_address().get_values();
-		std::copy(ipv6.begin(), ipv6.end(), std::begin(address.sin6_addr.u.Word));
+		std::memcpy(&address.sin6_addr, &ipv6, sizeof(in6_addr));
 
 		socklen_t from_length = sizeof(address);
 		std::ptrdiff_t data_length = sendto(m_sock, reinterpret_cast<const char*>(data), length, 0, reinterpret_cast<const sockaddr*>(&address), from_length);
@@ -580,7 +591,7 @@ namespace accel
 		client_socket = ::accept(m_sock, reinterpret_cast<sockaddr*>(&address), &length);
 		if (client_socket == INVALID_SOCKET)
 			throw socket_exception();
-		return std::make_pair<socket, endpoint_v4>(socket(client_socket), endpoint_v4(ip_address_v4(network_u32(address.sin_addr.S_un.S_addr)), ntohs(address.sin_port)));
+		return std::make_pair<socket, endpoint_v4>(socket(client_socket), endpoint_v4(ip_address_v4(network_u32(address.sin_addr.s_addr)), network_u16(address.sin_port)));
 	}
 
 	template<> inline socket::connection<endpoint_v6> socket::accept<endpoint_v6>()
@@ -591,9 +602,9 @@ namespace accel
 		client_socket = ::accept(m_sock, reinterpret_cast<sockaddr*>(&address), &length);
 		if (client_socket == INVALID_SOCKET)
 			throw socket_exception();
-		std::array<std::uint16_t, 8> values;
-		std::copy(std::begin(address.sin6_addr.u.Word), std::end(address.sin6_addr.u.Word), values.begin());
-		return std::make_pair<socket, endpoint_v6>(socket(client_socket), endpoint_v6(ip_address_v6(values), ntohs(address.sin6_port)));
+		std::array<std::uint16_t, 8> shorts;
+		std::memcpy(shorts.data(), &address.sin6_addr, sizeof(in6_addr));
+		return std::make_pair<socket, endpoint_v6>(socket(client_socket), endpoint_v6(ip_address_v6(shorts), network_u16(address.sin6_port)));
 	}
 }
 
